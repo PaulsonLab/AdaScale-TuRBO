@@ -12,7 +12,7 @@ sys.path.append(os.path.abspath('/fs/ess/PAS2983/jontwt/AdaScale-TuRBO/src'))
 import math
 import warnings
 from dataclasses import dataclass
-from botorch.test_functions.synthetic import Rastrigin
+from botorch.test_functions.synthetic import Ackley, Rosenbrock, StyblinskiTang, Griewank, Michalewicz, Rastrigin
 import torch
 from botorch.acquisition import qExpectedImprovement, qLogExpectedImprovement
 from botorch.exceptions import BadInitialCandidatesWarning
@@ -28,6 +28,7 @@ from gpytorch.constraints import Interval
 from gpytorch.kernels import MaternKernel, ScaleKernel, RBFKernel
 from gpytorch.likelihoods import GaussianLikelihood
 from gpytorch.mlls import ExactMarginalLogLikelihood
+# from Generate_GP_prior_samples import PriorGP, GaussianProcessPriorSampler
 from gpytorch.likelihoods import FixedNoiseGaussianLikelihood
 from gpytorch_modules_new import (
     get_covar_module_with_dim_scaled_prior
@@ -36,7 +37,7 @@ from gpytorch_modules_new import (
 warnings.filterwarnings("ignore", category=BadInitialCandidatesWarning)
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
-# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 device = torch.device("cpu")
 dtype = torch.double
 
@@ -145,24 +146,26 @@ def generate_batch(
             q=batch_size,
             num_restarts=num_restarts,
             raw_samples=raw_samples,
+            # options={"sample_around_best": True}
         )
 
     return X_next
 
-dim = 100
+dim = 50
 Ninit = 10
-lb = -5.12
-ub = 5.12
+lb = 0
+ub = 3.14
 NUM_RESTARTS = 5 
 RAW_SAMPLES = 20
 N_CANDIDATES = min(5000, max(2000, 200 * dim))
-fun = Rastrigin(dim=dim, negate=True)
-T = 1
-replicate = 1
+fun = Michalewicz(dim=dim, negate=True)
+
+replicate = 10
 bo_iter = 1000
 
 regret = [[] for _ in range(replicate)]
 for seed in range(replicate):
+    # torch.set_num_threads(4)
    
     bo = 0
     while bo<bo_iter:
@@ -189,7 +192,7 @@ for seed in range(replicate):
         
             # Do the fitting and acquisition function optimization inside the Cholesky context
             with gpytorch.settings.max_cholesky_size(max_cholesky_size):
-                if (len(regret[seed])-1)%T==0:
+                if (len(regret[seed])-1)%10==0:
                     
                     covar_module = get_covar_module_with_dim_scaled_prior(
                         ard_num_dims=dim,
@@ -234,17 +237,16 @@ for seed in range(replicate):
             Y_turbo = torch.cat((Y_turbo, Y_next), dim=0)
             print(f"{len(X_turbo)}) Best value: {state.best_value:.2e}, TR length: {state.length:.2e}")
             
-            
+            regret[seed].append(float(max(max(Y_turbo), regret[seed][-1])))
             if bo>=bo_iter:
                 bo = 1e6
                 break
-            regret[seed].append(float(max(max(Y_turbo), regret[seed][-1])))
 
     for element in regret[0:seed+1]:
         while len(element)<=bo_iter:
             element.append(element[-1])
         
-    torch.save(torch.tensor(regret[0:seed+1]), 'Turbo_lognormal_'+str(dim)+'D_Rastrigin_regret.pt')     
+    torch.save(torch.tensor(regret[0:seed+1]), 'Turbo_lognormal_'+str(dim)+'D_Michalewicz_regret.pt')     
     
     
     

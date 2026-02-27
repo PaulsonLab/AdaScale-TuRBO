@@ -5,14 +5,11 @@ Created on Fri Mar 21 12:33:49 2025
 
 @author: tang.1856
 """
-import sys
-import os
-sys.path.append(os.path.abspath('/fs/ess/PAS2983/jontwt/AdaScale-TuRBO/src'))
 
 import math
 import warnings
 from dataclasses import dataclass
-from botorch.test_functions.synthetic import Rastrigin
+from botorch.test_functions.synthetic import Ackley, Rosenbrock, StyblinskiTang, Griewank, Michalewicz, Rastrigin
 import torch
 from botorch.acquisition import qExpectedImprovement, qLogExpectedImprovement
 from botorch.exceptions import BadInitialCandidatesWarning
@@ -29,14 +26,12 @@ from gpytorch.kernels import MaternKernel, ScaleKernel, RBFKernel
 from gpytorch.likelihoods import GaussianLikelihood
 from gpytorch.mlls import ExactMarginalLogLikelihood
 from gpytorch.likelihoods import FixedNoiseGaussianLikelihood
-from gpytorch_modules_new import (
-    get_covar_module_with_dim_scaled_prior
-)
+
 
 warnings.filterwarnings("ignore", category=BadInitialCandidatesWarning)
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
-# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 device = torch.device("cpu")
 dtype = torch.double
 
@@ -110,7 +105,7 @@ def generate_batch(
 
     # Scale the TR to be proportional to the lengthscales
     x_center = X[Y.argmax(), :].clone()
-    weights = model.covar_module.lengthscale.squeeze().detach()
+    weights = model.covar_module.base_kernel.lengthscale.squeeze().detach()
     weights = weights / weights.mean()
     weights = weights / torch.prod(weights.pow(1.0 / len(weights)))
     tr_lb = torch.clamp(x_center - weights * state.length / 2.0, 0.0, 1.0)
@@ -145,25 +140,27 @@ def generate_batch(
             q=batch_size,
             num_restarts=num_restarts,
             raw_samples=raw_samples,
+            # options={"sample_around_best": True}
         )
 
     return X_next
 
-dim = 100
+dim = 50
 Ninit = 10
-lb = -5.12
-ub = 5.12
+lb = 0
+ub = 3.14
+L0 = 0.2
+fun = Michalewicz(dim=dim, negate=True)
+replicate = 10
+bo_iter = 500
 NUM_RESTARTS = 5 
 RAW_SAMPLES = 20
 N_CANDIDATES = min(5000, max(2000, 200 * dim))
-fun = Rastrigin(dim=dim, negate=True)
-T = 1
-replicate = 1
-bo_iter = 1000
 
 regret = [[] for _ in range(replicate)]
 for seed in range(replicate):
-   
+    # torch.set_num_threads(4)
+    
     bo = 0
     while bo<bo_iter:
         if bo == 0:
@@ -171,17 +168,17 @@ for seed in range(replicate):
         else:
             bo += Ninit
             X_turbo = torch.quasirandom.SobolEngine(dimension=dim,  scramble=True, seed = torch.randint(0,int(1e6),()).item()).draw(Ninit).to(device).to(torch.float64) 
-        
+            
         Y_turbo = fun(lb+(ub-lb)*X_turbo).detach().to(torch.float64).to(device).unsqueeze(1)
-        state = TurboState(dim, batch_size=batch_size, best_value=max(Y_turbo).item())
+        state = TurboState(dim, length=L0, batch_size=batch_size, best_value=max(Y_turbo).item())
         
         
-        
-        if bo == 0:
+        if bo ==0:
             regret[seed].append(float(max(Y_turbo)))
         else:
             regret[seed].append(float(max(max(Y_turbo), regret[seed][-1])))
-            
+       
+        
         while not state.restart_triggered:  # Run until TuRBO converges
             # Fit a GP model
             train_Y = (Y_turbo - Y_turbo.mean()) / Y_turbo.std()
@@ -189,17 +186,18 @@ for seed in range(replicate):
         
             # Do the fitting and acquisition function optimization inside the Cholesky context
             with gpytorch.settings.max_cholesky_size(max_cholesky_size):
-                if (len(regret[seed])-1)%T==0:
-                    
-                    covar_module = get_covar_module_with_dim_scaled_prior(
-                        ard_num_dims=dim,
-                        use_rbf_kernel=False,
-                        dim = dim,
+                if (len(regret[seed])-1)%10==0:
+           
+                    likelihood = GaussianLikelihood(noise_constraint=Interval(1e-8, 1e-3))
+                    covar_module = ScaleKernel(  # Use the same lengthscale prior as in the TuRBO paper
+                        MaternKernel(
+                            ard_num_dims=dim, lengthscale_constraint=Interval(0.005, 4.0)
+                        )
                     )
-                    
-                    model = SingleTaskGP(X_turbo, train_Y, covar_module = covar_module)
-                    mll = ExactMarginalLogLikelihood(model.likelihood, model)        
-                    
+                    model = SingleTaskGP(
+                        X_turbo.to(torch.float64), train_Y.to(torch.float64), covar_module=covar_module, likelihood=likelihood
+                    )
+                    mll = ExactMarginalLogLikelihood(model.likelihood, model) 
                     try:                      
                         fit_gpytorch_mll(mll)
                     except:
@@ -223,7 +221,7 @@ for seed in range(replicate):
                 )  
                 
             bo+=1
-         
+            
             Y_next = fun(lb+(ub-lb)*X_next).unsqueeze(-1)
         
             # Update state
@@ -233,18 +231,18 @@ for seed in range(replicate):
             X_turbo = torch.cat((X_turbo, X_next), dim=0)
             Y_turbo = torch.cat((Y_turbo, Y_next), dim=0)
             print(f"{len(X_turbo)}) Best value: {state.best_value:.2e}, TR length: {state.length:.2e}")
-            
+            # regret[seed].append(float(max(Y_turbo)))
             
             if bo>=bo_iter:
-                bo = 1e6
+                bo = 10000
                 break
             regret[seed].append(float(max(max(Y_turbo), regret[seed][-1])))
-
+    
     for element in regret[0:seed+1]:
         while len(element)<=bo_iter:
             element.append(element[-1])
         
-    torch.save(torch.tensor(regret[0:seed+1]), 'Turbo_lognormal_'+str(dim)+'D_Rastrigin_regret.pt')     
+    torch.save(torch.tensor(regret[0:seed+1]), 'Turbo_'+str(L0)+'L_'+str(dim)+'D_Michalewicz_regret.pt')     
     
     
     

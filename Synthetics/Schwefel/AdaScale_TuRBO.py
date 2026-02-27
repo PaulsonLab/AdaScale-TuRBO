@@ -12,7 +12,7 @@ sys.path.append(os.path.abspath('/fs/ess/PAS2983/jontwt/AdaScale-TuRBO/src'))
 import math
 import warnings
 from dataclasses import dataclass
-from botorch.test_functions.synthetic import Rastrigin
+
 import torch
 from botorch.acquisition import qExpectedImprovement, qLogExpectedImprovement
 from botorch.exceptions import BadInitialCandidatesWarning
@@ -36,14 +36,15 @@ from gpytorch_modules_new import (
 warnings.filterwarnings("ignore", category=BadInitialCandidatesWarning)
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
-# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 device = torch.device("cpu")
 dtype = torch.double
 
 batch_size = 1
 max_cholesky_size = float("inf")  # Always use Cholesky
 
-
+def fun(x):
+    return -(418.9829*dim - torch.sum(x*torch.sin(torch.sqrt(torch.abs(x))), dim=1))
 
 @dataclass
 class TurboState:
@@ -110,11 +111,12 @@ def generate_batch(
 
     # Scale the TR to be proportional to the lengthscales
     x_center = X[Y.argmax(), :].clone()
+    # x_center = X[Ninit:][Y[Ninit:].argmax(), :].clone()
     weights = model.covar_module.lengthscale.squeeze().detach()
     weights = weights / weights.mean()
     weights = weights / torch.prod(weights.pow(1.0 / len(weights)))
-    tr_lb = torch.clamp(x_center - weights * state.length / 2.0, 0.0, 1.0)
-    tr_ub = torch.clamp(x_center + weights * state.length / 2.0, 0.0, 1.0)
+    tr_lb = torch.clamp(x_center - weights * state.length / 2.0, 0.0, 1.0) 
+    tr_ub = torch.clamp(x_center + weights * state.length / 2.0, 0.0, 1.0) 
 
     if acqf == "ts":
         dim = X.shape[-1]
@@ -145,43 +147,46 @@ def generate_batch(
             q=batch_size,
             num_restarts=num_restarts,
             raw_samples=raw_samples,
+            # options={"sample_around_best": True}
         )
+                
 
     return X_next
 
-dim = 100
+dim = 50
 Ninit = 10
-lb = -5.12
-ub = 5.12
+lb = -500
+ub = 500
+# fun = Rastrigin(dim=dim, negate=True)
+L0=0.2
+replicate = 10
+bo_iter = 500
 NUM_RESTARTS = 5 
 RAW_SAMPLES = 20
 N_CANDIDATES = min(5000, max(2000, 200 * dim))
-fun = Rastrigin(dim=dim, negate=True)
-T = 1
-replicate = 1
-bo_iter = 1000
 
 regret = [[] for _ in range(replicate)]
 for seed in range(replicate):
-   
+    # torch.set_num_threads(4)
+
     bo = 0
-    while bo<bo_iter:
+    while bo< bo_iter:
         if bo == 0:
-            X_turbo = torch.quasirandom.SobolEngine(dimension=dim,  scramble=True, seed=seed).draw(Ninit).to(device).to(torch.float64)  
+            X_turbo = torch.quasirandom.SobolEngine(dimension=dim,  scramble=True, seed=seed).draw(Ninit).to(device).to(torch.float64)              
         else:
             bo += Ninit
             X_turbo = torch.quasirandom.SobolEngine(dimension=dim,  scramble=True, seed = torch.randint(0,int(1e6),()).item()).draw(Ninit).to(device).to(torch.float64) 
         
         Y_turbo = fun(lb+(ub-lb)*X_turbo).detach().to(torch.float64).to(device).unsqueeze(1)
-        state = TurboState(dim, batch_size=batch_size, best_value=max(Y_turbo).item())
         
+        state = TurboState(dim, length=L0, batch_size=batch_size, best_value=max(Y_turbo).item())
         
-        
-        if bo == 0:
+        if bo ==0:
             regret[seed].append(float(max(Y_turbo)))
         else:
             regret[seed].append(float(max(max(Y_turbo), regret[seed][-1])))
-            
+        
+     
         while not state.restart_triggered:  # Run until TuRBO converges
             # Fit a GP model
             train_Y = (Y_turbo - Y_turbo.mean()) / Y_turbo.std()
@@ -189,14 +194,15 @@ for seed in range(replicate):
         
             # Do the fitting and acquisition function optimization inside the Cholesky context
             with gpytorch.settings.max_cholesky_size(max_cholesky_size):
-                if (len(regret[seed])-1)%T==0:
+                if (len(regret[seed])-1)%10==0:
                     
                     covar_module = get_covar_module_with_dim_scaled_prior(
                         ard_num_dims=dim,
                         use_rbf_kernel=False,
+                        length = state.length,
                         dim = dim,
                     )
-                    
+
                     model = SingleTaskGP(X_turbo, train_Y, covar_module = covar_module)
                     mll = ExactMarginalLogLikelihood(model.likelihood, model)        
                     
@@ -223,7 +229,7 @@ for seed in range(replicate):
                 )  
                 
             bo+=1
-         
+            
             Y_next = fun(lb+(ub-lb)*X_next).unsqueeze(-1)
         
             # Update state
@@ -234,7 +240,6 @@ for seed in range(replicate):
             Y_turbo = torch.cat((Y_turbo, Y_next), dim=0)
             print(f"{len(X_turbo)}) Best value: {state.best_value:.2e}, TR length: {state.length:.2e}")
             
-            
             if bo>=bo_iter:
                 bo = 1e6
                 break
@@ -242,9 +247,9 @@ for seed in range(replicate):
 
     for element in regret[0:seed+1]:
         while len(element)<=bo_iter:
-            element.append(element[-1])
-        
-    torch.save(torch.tensor(regret[0:seed+1]), 'Turbo_lognormal_'+str(dim)+'D_Rastrigin_regret.pt')     
+            element.append(element[-1])    
+            
+    torch.save(torch.tensor(regret[0:seed+1]), 'Turbo_lognormal_new_'+str(L0)+'L_'+str(dim)+'D_Schwefel_regret.pt')     
     
     
     

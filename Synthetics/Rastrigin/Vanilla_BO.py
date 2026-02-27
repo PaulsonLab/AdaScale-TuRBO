@@ -5,7 +5,7 @@ Created on Fri Feb 28 13:32:57 2025
 
 @author: tang.1856
 """
-from botorch.test_functions.synthetic import Rastrigin
+from botorch.test_functions.synthetic import Ackley, Rosenbrock, StyblinskiTang, Powell, Griewank, Rastrigin
 import torch
 from botorch.models.transforms import Normalize, Standardize
 from botorch.fit import fit_gpytorch_mll
@@ -23,20 +23,19 @@ from botorch.models.utils.gpytorch_modules import (
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 dtype = torch.float64
 
-dim = 100
+dim = 50
 fun = Rastrigin(dim=dim, negate=True).to(dtype=dtype, device=device)
 Ninit = 10
-T = 1
 lb = -5.12
 ub = 5.12
 NUM_RESTARTS = 5 
 RAW_SAMPLES = 20
 bo_iter = 1000
-replicate = 1
+replicate = 10
 
 regret_y = [[] for _ in range(replicate)]
 for seed in range(replicate):
-    
+    # torch.set_num_threads(4)
 
     train_X = torch.quasirandom.SobolEngine(dimension=dim,  scramble=True, seed=seed).draw(Ninit).to(dtype=dtype, device=device)
     train_Y = fun(lb+(ub-lb)*train_X).unsqueeze(1)
@@ -51,7 +50,7 @@ for seed in range(replicate):
             use_rbf_kernel=False,
         )
             
-        if bo%T==0:
+        if bo%10==0:
             gp = SingleTaskGP(
               train_X=train_X.to(torch.float64),
               train_Y=train_Y_scaled.to(torch.float64),

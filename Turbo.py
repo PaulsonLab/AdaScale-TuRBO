@@ -9,7 +9,7 @@ Created on Fri Mar 21 12:33:49 2025
 import math
 import warnings
 from dataclasses import dataclass
-from botorch.test_functions.synthetic import Ackley, Rosenbrock, StyblinskiTang, Griewank, Michalewicz, Rastrigin
+from botorch.test_functions.synthetic import Rastrigin
 import torch
 from botorch.acquisition import qExpectedImprovement, qLogExpectedImprovement
 from botorch.exceptions import BadInitialCandidatesWarning
@@ -140,7 +140,6 @@ def generate_batch(
             q=batch_size,
             num_restarts=num_restarts,
             raw_samples=raw_samples,
-            # options={"sample_around_best": True}
         )
 
     return X_next
@@ -158,8 +157,7 @@ N_CANDIDATES = min(5000, max(2000, 200 * dim))
 
 regret = [[] for _ in range(replicate)]
 for seed in range(replicate):
-    # torch.set_num_threads(4)
-    
+   
     bo = 0
     while bo<bo_iter:
         if bo == 0:
@@ -230,11 +228,11 @@ for seed in range(replicate):
             X_turbo = torch.cat((X_turbo, X_next), dim=0)
             Y_turbo = torch.cat((Y_turbo, Y_next), dim=0)
             print(f"{len(X_turbo)}) Best value: {state.best_value:.2e}, TR length: {state.length:.2e}")
-            # regret[seed].append(float(max(Y_turbo)))
-            regret[seed].append(float(max(max(Y_turbo), regret[seed][-1])))
+            
             if bo>=bo_iter:
                 bo = 10000
                 break
+            regret[seed].append(float(max(max(Y_turbo), regret[seed][-1])))
     
     for element in regret[0:seed+1]:
         while len(element)<=bo_iter:
