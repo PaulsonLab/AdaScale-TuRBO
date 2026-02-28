@@ -25,7 +25,7 @@ from gpytorch.constraints.constraints import GreaterThan
 from gpytorch.kernels import MaternKernel, RBFKernel, ScaleKernel, LinearKernel
 from gpytorch.likelihoods.gaussian_likelihood import GaussianLikelihood
 from gpytorch.priors.torch_priors import GammaPrior, LogNormalPrior
-from mixed_kernel import MixedMaternLinearKernel
+
 
 MIN_INFERRED_NOISE_LEVEL = 1e-4
 SQRT2 = sqrt(2)
@@ -138,60 +138,7 @@ def get_covar_module_with_dim_scaled_prior(
     )
     return base_kernel
 
-# def get_covar_module_with_dim_scaled_prior_mixed(
-#     ard_num_dims: int,
-#     batch_shape: torch.Size | None = None,
-#     use_rbf_kernel: bool = True,
-#     active_dims: Sequence[int] | None = None,
-#     dim = 1.0
-# ) -> MaternKernel | RBFKernel:
-#     """Returns an RBF or Matern kernel with priors
-#     from  [Hvarfner2024vanilla]_.
 
-#     Args:
-#         ard_num_dims: Number of feature dimensions for ARD.
-#         batch_shape: Batch shape for the covariance module.
-#         use_rbf_kernel: Whether to use an RBF kernel. If False, uses a Matern kernel.
-#         active_dims: The set of input dimensions to compute the covariances on.
-#             By default, the covariance is computed using the full input tensor.
-#             Set this if you'd like to ignore certain dimensions.
-
-#     Returns:
-#         A Kernel constructed according to the given arguments. The prior is constrained
-#         to have lengthscales larger than 0.025 for numerical stability.
-#     """
-#     base_class1 = MaternKernel
-#     base_class2 = LinearKernel
-    
-#     lengthscale_prior = LogNormalPrior(loc=SQRT2 + log(dim**0.5), scale=SQRT3)
-#     base_kernel = base_class1(
-#         ard_num_dims=ard_num_dims,
-#         batch_shape=batch_shape,
-#         lengthscale_prior=lengthscale_prior,
-#         lengthscale_constraint=GreaterThan(
-#             2.5e-2, transform=None, initial_value=lengthscale_prior.mode
-#         ),
-#         active_dims=active_dims,
-#     ) + base_class2(ard_num_dims=ard_num_dims, variance_constraint=gpytorch.constraints.Interval(1e-5, 10))
-    
-#     return base_kernel
-
-def get_covar_module_with_dim_scaled_prior_mixed(
-    ard_num_dims: int,
-    use_rbf_kernel: bool = False,
-    batch_shape: torch.Size | None = None,
-    active_dims: Sequence[int] | None = None,
-    dim: float = 1.0,
-    length: float = 1.0
-) -> MixedMaternLinearKernel:
-    
-    return MixedMaternLinearKernel(
-        ard_num_dims=ard_num_dims,
-        batch_shape=batch_shape,
-        active_dims=active_dims,
-        dim=dim,
-        length = length
-    )
 
 
 
