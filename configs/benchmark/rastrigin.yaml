@@ -1,0 +1,12 @@
+name: Rastrigin
+n_tot: 500
+N_init: 10
+dim: 50
+T: 1
+lb: -5
+ub: 5
+
+fn:
+  _target_: botorch.test_functions.synthetic.Rastrigin
+  dim: ${..dim}
+  negate: False  # Negate the function to turn it into a minimization problem

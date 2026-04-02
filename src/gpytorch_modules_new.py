@@ -122,8 +122,7 @@ def get_covar_module_with_dim_scaled_prior(
         to have lengthscales larger than 0.025 for numerical stability.
     """
     base_class = RBFKernel if use_rbf_kernel else MaternKernel
-    # lengthscale_prior = LogNormalPrior(loc=SQRT2 + log(ard_num_dims) * 0.5, scale=SQRT3)
-    # lengthscale_prior = LogNormalPrior(loc=SQRT2 + log(ard_num_dims**0.5 * length), scale=SQRT3)
+
     lengthscale_prior = LogNormalPrior(loc=SQRT2 + log(dim**0.5 * length), scale=SQRT3)
     base_kernel = base_class(
         ard_num_dims=ard_num_dims,

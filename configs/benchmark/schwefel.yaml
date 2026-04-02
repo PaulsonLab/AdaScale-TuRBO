@@ -1,0 +1,12 @@
+name: Schwefel
+n_tot: 500
+N_init: 10
+dim: 50
+T: 1
+lb: -500
+ub: 500
+
+fn:
+  _target_: src.benchmark.Schwefel.Schwefel
+  dim: ${..dim}
+  negate: False  # Negate the function to turn it into a minimization problem

@@ -1,0 +1,13 @@
+name: Rover
+n_tot: 1000
+N_init: 10
+dim: 60
+T: 1
+
+lb: -0.1
+ub: 1.1
+
+
+fn:
+  _target_: src.benchmark.rover_function.rover_fun
+
