@@ -28,4 +28,14 @@ All default settings are stored in configs/default.yaml. Since this project uses
 python main.py benchmark=rastrigin seed=0 benchmark.n_tot=1000
 ```
 
+## Citation
+If you use this code in your research, please cite the following paper:
 
+```
+@article{tang2026rethinking,
+  title={Rethinking Trust Region Bayesian Optimization in High Dimensions},
+  author={Tang, Wei-Ting and Paulson, Joel A},
+  journal={arXiv preprint arXiv:2604.22967},
+  year={2026}
+}
+```
