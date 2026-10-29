@@ -4,7 +4,9 @@ Run AdaScale-TuRBO on the 2D Branin function and animate the optimization:
 evaluated points, the trust region, and the incumbent at every iteration.
 
 Usage:
-    python examples/branin_animation.py [--seed 0] [--n-init 10] [--n-iter 50]
+    python examples/branin_animation.py [--seed 3] [--n-init 5] [--n-iter 50] [--tol 1e-3]
+
+The run stops early once the regret f_best - f* drops below --tol.
 """
 import argparse
 import math
@@ -55,7 +57,7 @@ def trust_region_bounds(state, model, X, Y):
     return tr_lb, tr_ub
 
 
-def run(seed, n_init, n_iter):
+def run(seed, n_init, n_iter, tol):
     torch.manual_seed(seed)
     fun = Branin(negate=True).to(dtype=dtype, device=device)  # maximize -Branin
     lb, ub = fun.bounds[0], fun.bounds[1]
@@ -101,6 +103,10 @@ def run(seed, n_init, n_iter):
         print(f"iter {it + 1:3d}  L = {history[-1]['length']:.4f}  "
               f"f(x) = {-Y_next.item():8.4f}  best = {-Y.max().item():.6f}")
 
+        if -Y.max().item() - BRANIN_MIN < tol:
+            print(f"  Regret below {tol:g} after iteration {it + 1}; stopping")
+            break
+
         restarted = state.restart_triggered
         if restarted:  # TR collapsed: restart from L0 around the incumbent
             print(f"  TR side length below L_min after iteration {it + 1}; resetting L to 0.8")
@@ -124,7 +130,7 @@ def _branin_grid(xlim, ylim, n=300):
     return g1, g2, Branin()(grid).numpy().reshape(g1.shape)
 
 
-def animate(X_all, f_all, history, lb, ub, n_init, out_path, fps=3):
+def animate(X_all, f_all, history, lb, ub, n_init, tol, out_path, fps=3):
     plt.rcParams.update({
         "font.family": "serif",
         "mathtext.fontset": "cm",
@@ -163,8 +169,8 @@ def animate(X_all, f_all, history, lb, ub, n_init, out_path, fps=3):
     # Regret curve
     evals = np.arange(1, len(f_all) + 1)
     ax_r.axvspan(0.5, n_init + 0.5, color="0.92", zorder=0)
-    ax_r.text(n_init / 2 + 0.5, 0.97, "Sobol init", transform=ax_r.get_xaxis_transform(),
-              ha="center", va="top", fontsize=10, color="0.35")
+    ax_r.text(n_init / 2 + 0.5, 0.03, "Sobol init", transform=ax_r.get_xaxis_transform(),
+              ha="center", va="bottom", fontsize=10, color="0.35")
     restart_markers = []  # (iteration, artists), revealed once the animation reaches them
     for i, h in enumerate(history):
         if h["restarted"]:
@@ -172,10 +178,13 @@ def animate(X_all, f_all, history, lb, ub, n_init, out_path, fps=3):
             label = ax_r.text(n_init + i + 1.5, 0.97, "TR restart", ha="left", va="top",
                               transform=ax_r.get_xaxis_transform(), fontsize=10, color="red")
             restart_markers.append((i + 1, (line, label)))
+    ax_r.axhline(tol, color="green", linestyle="--", linewidth=1.2)
+    ax_r.text(n_init + 1, tol * 1.15, "stopping tolerance", ha="left", va="bottom",
+              fontsize=10, color="green")
     (curve,) = ax_r.plot([], [], color="black", linewidth=1.8, drawstyle="steps-post")
     ax_r.set_xlim(0.5, len(f_all) + 0.5)
     ax_r.set_yscale("log")
-    ax_r.set_ylim(regret.min() / 2, regret.max() * 2)
+    ax_r.set_ylim(min(regret.min(), tol) / 3, regret.max() * 2)
     ax_r.set_xlabel("Function evaluations")
     ax_r.set_ylabel(r"Regret  $f_{\mathrm{best}} - f^*$")
     ax_r.set_title("Convergence")
@@ -263,8 +272,10 @@ def animate(X_all, f_all, history, lb, ub, n_init, out_path, fps=3):
             title.set_text(f"AdaScale-TuRBO on Branin: initial design ({n_init} Sobol points)")
         else:
             note = "  (TR restarted)" if h["restarted"] else ""
+            if k == n_iter and regret[n_seen - 1] < tol:
+                note = "  (converged)"
             title.set_text(
-                f"AdaScale-TuRBO on Branin: iteration {k}/{n_iter},  $L = {h['length']:.3g}$,  "
+                f"AdaScale-TuRBO on Branin: iteration {k},  $L = {h['length']:.3g}$,  "
                 f"best $f = {f_all[i_best]:.5f}$  ($f^* = {BRANIN_MIN}$){note}"
             )
 
@@ -277,9 +288,10 @@ def animate(X_all, f_all, history, lb, ub, n_init, out_path, fps=3):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--n-init", type=int, default=10)
+    parser.add_argument("--seed", type=int, default=3)
+    parser.add_argument("--n-init", type=int, default=5)
     parser.add_argument("--n-iter", type=int, default=50)
+    parser.add_argument("--tol", type=float, default=1e-3, help="stop once f_best - f* < tol")
     parser.add_argument("--fps", type=int, default=3)
     parser.add_argument(
         "--out", default=os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -287,8 +299,8 @@ def main():
     )
     args = parser.parse_args()
 
-    X_all, f_all, history, lb, ub = run(args.seed, args.n_init, args.n_iter)
-    animate(X_all, f_all, history, lb, ub, args.n_init, args.out, fps=args.fps)
+    X_all, f_all, history, lb, ub = run(args.seed, args.n_init, args.n_iter, args.tol)
+    animate(X_all, f_all, history, lb, ub, args.n_init, args.tol, args.out, fps=args.fps)
     print(f"Saved {args.out}")
 
 
