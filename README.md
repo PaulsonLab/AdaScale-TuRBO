@@ -36,22 +36,7 @@ Compared with standard TuRBO, only the surrogate fit changes:
 | Signal variance | Learned | Fixed to $\sigma_f^2 = 1$ |
 
 The rest of the TuRBO loop is unchanged. The prior is rebuilt from the current $L$ each time the GP is
-refit:
-
-```mermaid
-flowchart TD
-    A[Sobol initial design] --> B["Build LogNormal prior<br/>from current L and D"]
-    B --> C[Fit GP via MAP]
-    C --> D["Maximize LogEI inside TR<br/>centered at incumbent"]
-    D --> E[Evaluate objective]
-    E --> F{"Update TR side length L"}
-    F -- "success streak: L = min(2L, L_max)" --> B
-    F -- "failure streak: L = L / 2" --> B
-    F -- "otherwise: keep L" --> B
-    F -- "L < L_min" --> G([Converged: restart TR])
-```
-
-This script stops at the first convergence (or when the budget `n_tot` is used up).
+refit.
 
 In the code, the prior is built in `get_covar_module_with_dim_scaled_prior`
 ([`src/gpytorch_modules_new.py`](src/gpytorch_modules_new.py)), and the TR loop lives in
