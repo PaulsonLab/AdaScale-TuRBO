@@ -1,23 +1,22 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Mon Mar 16 15:10:40 2026
-
 @author: jontwt
 """
-from botorch.test_functions.synthetic import SyntheticTestFunction
 import torch
+from botorch.test_functions.synthetic import SyntheticTestFunction
 from torch import Tensor
 
+
 class Schwefel(SyntheticTestFunction):
-    r"""Rosenbrock synthetic test function.
+    r"""Negated Schwefel synthetic test function (to be maximized).
 
-    d-dimensional function (usually evaluated on `[-5, 10]^d`):
+    d-dimensional function (usually evaluated on `[-500, 500]^d`):
 
-        f(x) = sum_{i=1}^{d-1} (100 (x_{i+1} - x_i^2)^2 + (x_i - 1)^2)
+        f(x) = -(418.9829 d - sum_{i=1}^{d} x_i sin(sqrt(|x_i|)))
 
-    f has one minimizer for its global minimum at `z_1 = (1, 1, ..., 1)` with
-    `f(z_i) = 0.0`.
+    f has its global maximum at `x ~= (420.9687, ..., 420.9687)` with
+    `f(x) ~= 0.0`.
     """
 
     _optimal_value = 0.0
@@ -42,12 +41,8 @@ class Schwefel(SyntheticTestFunction):
         self.continuous_inds = list(range(dim))
         if bounds is None:
             bounds = [(-500, 500) for _ in range(self.dim)]
-        self._optimizers = [tuple(1.0 for _ in range(self.dim))]
+        self._optimizers = [tuple(420.9687 for _ in range(self.dim))]
         super().__init__(noise_std=noise_std, negate=negate, bounds=bounds, dtype=dtype)
 
     def _evaluate_true(self, X: Tensor) -> Tensor:
-        # return torch.sum(
-        #     100.0 * (X[..., 1:] - X[..., :-1].pow(2)).pow(2) + (X[..., :-1] - 1).pow(2),
-        #     dim=-1,
-        # )
-        return -(418.9829*self.dim - torch.sum(X*torch.sin(torch.sqrt(torch.abs(X))), dim=1))
+        return -(418.9829 * self.dim - torch.sum(X * torch.sin(torch.sqrt(torch.abs(X))), dim=-1))

@@ -4,7 +4,6 @@ defaults:
 
 seed: 0
 
-
 hydra:
   job:
     config:
@@ -23,6 +22,3 @@ hydra:
 benchmark:  # see subconfigs for benchmark-specific options
   n_tot: ???  # Total number of points to evaluate function on
   N_init: ???  # Number of initial points to sample
-  mujoco:
-    binary_path: null
-    apptainer_sif_path: null

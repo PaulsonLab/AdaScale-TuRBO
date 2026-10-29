@@ -4,8 +4,9 @@ import numpy as np
 from src.benchmark.helper import ConstantOffsetFn, NormalizedInputFn
 import torch
 
-# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 device = torch.device("cpu")
+
+
 def create_cost_small():
     c = np.array([[0.11353145, 0.17251116],
                   [0.4849413, 0.7684513],
@@ -57,7 +58,6 @@ def create_cost_small():
     return cost_fn, start, goal
 
 
-# def create_small_domain():
 def create_small_domain(force_start=False,
                         force_goal=False,
                         start_miss_cost=None,
@@ -72,7 +72,7 @@ def create_small_domain(force_start=False,
     #                      goal=goal,
     #                      traj=traj,
     #                      s_range=np.array([[-0.1, -0.1], [1.1, 1.1]]))
-    
+
     domain = RoverDomain(cost_fn,
                          start=start,
                          goal=goal,
@@ -240,42 +240,16 @@ def create_large_domain(force_start=False,
     return domain
 
 
-def main():
-    def l2cost(x, point):
-        return 10 * np.linalg.norm(x - point, 1)
+class rover_fun:
+    """60-D rover trajectory planning benchmark (Wang et al., 2018), to be maximized."""
 
-    domain = create_large_domain(force_start=False,
-                                  force_goal=False,
-                                  start_miss_cost=l2cost,
-                                  goal_miss_cost=l2cost)
-    # domain = create_small_domain(force_start=False,
-    #                               force_goal=False,
-    #                               start_miss_cost=l2cost,
-    #                               goal_miss_cost=l2cost)
-    n_points = domain.traj.npoints
-
-    raw_x_range = np.repeat(domain.s_range, n_points, axis=1)
-
-    from helper import ConstantOffsetFn, NormalizedInputFn
-
-    # maximum value of f
-    f_max = 5.0
-    f = ConstantOffsetFn(domain, f_max)
-    f = NormalizedInputFn(f, raw_x_range)
-    x_range = f.get_range()
-
-    x = np.random.uniform(x_range[0], x_range[1])
-    x = np.ones(20)*0.5
-    print('Input = {}'.format(x))
-    print('Output = {}'.format(f(x)))
-
-class rover_fun():
-    def __init__(self,dim=60, negate=False):
+    def __init__(self, dim=60, negate=False):
         self.dim = dim
-        self.negate=negate
+        self.negate = negate
+
     def __call__(self, x):
         x = x.cpu().numpy()
-        
+
         def l2cost(x, point):
             return 10 * np.linalg.norm(x - point, 1)
 
@@ -283,10 +257,6 @@ class rover_fun():
                                       force_goal=False,
                                       start_miss_cost=l2cost,
                                       goal_miss_cost=l2cost)
-        # domain = create_small_domain(force_start=False,
-        #                               force_goal=False,
-        #                               start_miss_cost=l2cost,
-        #                               goal_miss_cost=l2cost)
         n_points = domain.traj.npoints
 
         raw_x_range = np.repeat(domain.s_range, n_points, axis=1)
@@ -295,19 +265,13 @@ class rover_fun():
         f_max = 5.0
         f = ConstantOffsetFn(domain, f_max)
         f = NormalizedInputFn(f, raw_x_range)
-        # x_range = f.get_range()
         x = (x - raw_x_range[0]) / (raw_x_range[1] - raw_x_range[0])
-        
+
         fun_value = []
         for element in x:
             fun_value.append(f(element))
-        
+
         if self.negate:
-            return -torch.tensor(fun_value,device=device)
+            return -torch.tensor(fun_value, device=device)
         else:
-            return torch.tensor(fun_value,device=device)
-    
-    
-    
-if __name__ == "__main__":
-    main()
+            return torch.tensor(fun_value, device=device)

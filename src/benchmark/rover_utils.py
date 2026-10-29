@@ -1,4 +1,3 @@
-# from itertools import izip
 
 import numpy as np
 import scipy.interpolate as si
@@ -10,14 +9,14 @@ class Trajectory:
         pass
 
     def set_params(self, start, goal, params):
-        raise NotImplemented
+        raise NotImplementedError
 
     def get_points(self, t):
-        raise NotImplemented
+        raise NotImplementedError
 
     @property
     def param_size(self):
-        raise NotImplemented
+        raise NotImplementedError
 
 
 class PointBSpline(Trajectory):

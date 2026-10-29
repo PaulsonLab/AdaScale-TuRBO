@@ -1,40 +1,32 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Fri Mar 21 12:33:49 2025
+AdaScale-TuRBO: trust-region Bayesian optimization with a dimension- and
+trust-region-scaled lengthscale prior.
 
 @author: tang.1856
 """
-# import sys
-# import os
-# sys.path.append(os.path.abspath('/fs/ess/PAS2983/jontwt/AdaScale-TuRBO/src'))
-import hydra
+import logging
 import math
 import warnings
+from collections import OrderedDict
 from dataclasses import dataclass
+
+import gpytorch
+import hydra
 import torch
+import tqdm
 from botorch.acquisition import qLogExpectedImprovement
 from botorch.exceptions import BadInitialCandidatesWarning
 from botorch.fit import fit_gpytorch_mll
 from botorch.generation import MaxPosteriorSampling
 from botorch.models import SingleTaskGP
 from botorch.optim import optimize_acqf
-from torch.quasirandom import SobolEngine
-from gpytorch.means import ZeroMean
-import gpytorch
-from gpytorch.constraints import Interval
-from gpytorch.kernels import MaternKernel, ScaleKernel, RBFKernel
-from gpytorch.likelihoods import GaussianLikelihood
 from gpytorch.mlls import ExactMarginalLogLikelihood
-from gpytorch.likelihoods import FixedNoiseGaussianLikelihood
-from gpytorch_modules_new import (
-    get_covar_module_with_dim_scaled_prior
-)
-from omegaconf import DictConfig, OmegaConf
-import tqdm as tqdm
-from collections import OrderedDict
-from contextlib import ExitStack
-import logging
+from omegaconf import DictConfig
+from torch.quasirandom import SobolEngine
+
+from gpytorch_modules_new import get_covar_module_with_dim_scaled_prior
 
 warnings.filterwarnings("ignore", category=BadInitialCandidatesWarning)
 warnings.filterwarnings("ignore", category=RuntimeWarning)
@@ -44,7 +36,6 @@ dtype = torch.double
 
 batch_size = 1
 max_cholesky_size = float("inf")  # Always use Cholesky
-
 
 
 @dataclass
@@ -115,8 +106,8 @@ def generate_batch(
     weights = model.covar_module.lengthscale.squeeze().detach()
     weights = weights / weights.mean()
     weights = weights / torch.prod(weights.pow(1.0 / len(weights)))
-    tr_lb = torch.clamp(x_center - weights * state.length / 2.0, 0.0, 1.0) 
-    tr_ub = torch.clamp(x_center + weights * state.length / 2.0, 0.0, 1.0) 
+    tr_lb = torch.clamp(x_center - weights * state.length / 2.0, 0.0, 1.0)
+    tr_ub = torch.clamp(x_center + weights * state.length / 2.0, 0.0, 1.0)
 
     if acqf == "ts":
         dim = X.shape[-1]
@@ -148,38 +139,33 @@ def generate_batch(
             num_restarts=num_restarts,
             raw_samples=raw_samples,
         )
-                
 
     return X_next
 
+
 def run_optimization(config: DictConfig) -> None:
-    
-   
     dim = config.benchmark.dim
     lb = torch.tensor(config.benchmark.lb).to(dtype).to(device)
     ub = torch.tensor(config.benchmark.ub).to(dtype).to(device)
     Ninit = config.benchmark.N_init
-    
     seed = config.seed
-    
+
     fun = hydra.utils.instantiate(config.benchmark.fn)
-    try:
+    if hasattr(fun, "to"):  # BoTorch test functions are nn.Modules; rover is not
         fun = fun.to(dtype).to(device)
-    except:
-        None   
-        
-    T = config.benchmark.T # re-fit GP per T iteration
+
+    T = config.benchmark.T  # re-fit GP per T iteration
     bo_iter = config.benchmark.n_tot
-    
-    NUM_RESTARTS = 5 
+
+    NUM_RESTARTS = 5
     RAW_SAMPLES = 200
-    
+
     bo = 0
-    X_turbo = torch.quasirandom.SobolEngine(dimension=dim,  scramble=True, seed=seed).draw(Ninit).to(device).to(torch.float64)                  
-    Y_turbo = fun(lb+(ub-lb)*X_turbo).detach().to(torch.float64).to(device).unsqueeze(1)
-    
+    X_turbo = get_initial_points(dim, Ninit, seed=seed)
+    Y_turbo = fun(lb + (ub - lb) * X_turbo).detach().to(dtype).to(device).unsqueeze(1)
+
     state = TurboState(dim, batch_size=batch_size, best_value=max(Y_turbo).item())
-    
+
     # Compute current best observation
     y_max: float = Y_turbo.max().item()
 
@@ -192,35 +178,31 @@ def run_optimization(config: DictConfig) -> None:
         bar_format="{desc}: {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]",
         disable=(not len(tqdm_log_list)),
     )
-    
+
     while not state.restart_triggered:  # Run until AdaScale-TuRBO converges
         # Fit a GP model
         train_Y = (Y_turbo - Y_turbo.mean()) / Y_turbo.std()
-        
-    
+
         # Do the fitting and acquisition function optimization inside the Cholesky context
         with gpytorch.settings.max_cholesky_size(max_cholesky_size):
-            if bo%T==0:
-                
+            if bo % T == 0:
                 covar_module = get_covar_module_with_dim_scaled_prior(
                     ard_num_dims=dim,
                     use_rbf_kernel=False,
-                    length = state.length,
-                    dim = dim,
+                    length=state.length,
+                    dim=dim,
                 )
 
-                model = SingleTaskGP(X_turbo, train_Y, covar_module = covar_module)
-                mll = ExactMarginalLogLikelihood(model.likelihood, model)        
-                
-                try:                      
+                model = SingleTaskGP(X_turbo, train_Y, covar_module=covar_module)
+                mll = ExactMarginalLogLikelihood(model.likelihood, model)
+
+                try:
                     fit_gpytorch_mll(mll)
-                except:
-                    print('cant fit GP')
-            
-                    
-            else:           
+                except Exception as e:
+                    logging.warning(f"GP fitting failed, using unfitted hyperparameters: {e}")
+            else:
                 model.set_train_data(inputs=X_turbo, targets=train_Y.flatten(), strict=False)
-            
+
             # Create a batch
             X_next = generate_batch(
                 state=state,
@@ -231,12 +213,12 @@ def run_optimization(config: DictConfig) -> None:
                 num_restarts=NUM_RESTARTS,
                 raw_samples=RAW_SAMPLES,
                 acqf="ei",
-            )  
-            
-        bo+=1
-        
-        Y_next = fun(lb+(ub-lb)*X_next).unsqueeze(-1)
-        
+            )
+
+        bo += 1
+
+        Y_next = fun(lb + (ub - lb) * X_next).unsqueeze(-1)
+
         with torch.no_grad():
             # See if we have a new best observation
             y_curr = Y_next.max().item()
@@ -251,20 +233,18 @@ def run_optimization(config: DictConfig) -> None:
             pbar.set_postfix(**{stat: iter_stats.get(stat, None) for stat in tqdm_log_list})
 
         pbar.update(1)
-    
+
         # Update state
         state = update_state(state=state, Y_next=Y_next)
-    
+
         # Append data
         X_turbo = torch.cat((X_turbo, X_next), dim=0)
         Y_turbo = torch.cat((Y_turbo, Y_next), dim=0)
-        # print(f"TR length: {state.length:.2e}")
-        
-        if bo>= bo_iter:
+
+        if bo >= bo_iter:
             break
-        
+
     pbar.close()
 
     logging.info(f"Best observation: {y_max}")
- 
 

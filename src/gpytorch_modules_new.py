@@ -103,8 +103,8 @@ def get_covar_module_with_dim_scaled_prior(
     batch_shape: torch.Size | None = None,
     use_rbf_kernel: bool = True,
     active_dims: Sequence[int] | None = None,
-    length = 1.0,
-    dim = 1.0
+    length: float = 1.0,
+    dim: int = 1,
 ) -> MaternKernel | RBFKernel:
     """Returns an RBF or Matern kernel with priors
     from  [Hvarfner2024vanilla]_.
@@ -116,6 +116,8 @@ def get_covar_module_with_dim_scaled_prior(
         active_dims: The set of input dimensions to compute the covariances on.
             By default, the covariance is computed using the full input tensor.
             Set this if you'd like to ignore certain dimensions.
+        length: Current trust-region side length; shifts the lengthscale prior.
+        dim: Problem dimension; the prior median scales with sqrt(dim).
 
     Returns:
         A Kernel constructed according to the given arguments. The prior is constrained
@@ -131,13 +133,7 @@ def get_covar_module_with_dim_scaled_prior(
         lengthscale_constraint=GreaterThan(
             2.5e-2, transform=None, initial_value=lengthscale_prior.mode
         ),
-        # lengthscale_constraint = gpytorch.constraints.Interval(0.1, 5.0),
         # pyre-ignore[6] GPyTorch type is unnecessarily restrictive.
         active_dims=active_dims,
     )
     return base_kernel
-
-
-
-
-

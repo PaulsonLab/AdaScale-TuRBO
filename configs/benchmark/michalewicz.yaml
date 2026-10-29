@@ -9,4 +9,4 @@ ub: 3.14
 fn:
   _target_: botorch.test_functions.synthetic.Michalewicz
   dim: ${..dim}
-  negate: False  # Negate the function to turn it into a minimization problem
+  negate: False  # If True, negate the objective (the optimizer maximizes)
