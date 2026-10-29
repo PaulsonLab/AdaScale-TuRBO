@@ -1,11 +1,19 @@
 #!/usr/bin/env python3
 """
-Run AdaScale-TuRBO on the 2D Branin function and animate the optimization:
-evaluated points, the trust region, and the incumbent at every iteration.
+Run AdaScale-TuRBO (or standard TuRBO, for comparison) on the 2D Branin function
+and animate the optimization: evaluated points, the trust region, and the incumbent
+at every iteration.
 
 Usage:
-    python examples/branin_animation.py [--seed 3] [--n-init 5] [--n-iter 50] [--tol 1e-3]
-                                        [--length-init 0.4] [--fps 2]
+    python examples/branin_animation.py [--method adascale|turbo] [--seed 3] [--n-init 5]
+                                        [--n-iter 50] [--tol 1e-3] [--length-init 0.4]
+                                        [--fps 2]
+
+Both methods use the same initial points, TR rules, and LogEI acquisition; they differ
+only in the GP surrogate:
+  adascale  Matern-5/2 with the LogNormal lengthscale prior scaled by L*sqrt(D), fit by MAP
+  turbo     Scale(Matern-5/2) with box-constrained lengthscales, fit by MLE
+            (the BoTorch TuRBO tutorial setup)
 
 The run stops early once the regret f_best - f* drops below --tol.
 """
@@ -18,9 +26,14 @@ import gpytorch
 import matplotlib
 import numpy as np
 import torch
+from botorch.acquisition import qLogExpectedImprovement
 from botorch.fit import fit_gpytorch_mll
 from botorch.models import SingleTaskGP
+from botorch.optim import optimize_acqf
 from botorch.test_functions.synthetic import Branin
+from gpytorch.constraints import Interval
+from gpytorch.kernels import MaternKernel, ScaleKernel
+from gpytorch.likelihoods import GaussianLikelihood
 from gpytorch.mlls import ExactMarginalLogLikelihood
 
 matplotlib.use("Agg")
@@ -36,7 +49,6 @@ from AdaScale_TuRBO_optimize import (  # noqa: E402
     TurboState,
     dtype,
     device,
-    generate_batch,
     get_initial_points,
     max_cholesky_size,
     update_state,
@@ -45,12 +57,35 @@ from gpytorch_modules_new import get_covar_module_with_dim_scaled_prior  # noqa:
 
 BRANIN_OPTIMA = np.array([[-math.pi, 12.275], [math.pi, 2.275], [9.42478, 2.475]])
 BRANIN_MIN = 0.397887
+METHOD_NAMES = {"adascale": "AdaScale-TuRBO", "turbo": "TuRBO"}
+
+
+def fit_model(method, X, train_Y, length):
+    dim = X.shape[-1]
+    if method == "adascale":
+        covar_module = get_covar_module_with_dim_scaled_prior(
+            ard_num_dims=dim, use_rbf_kernel=False, length=length, dim=dim
+        )
+        model = SingleTaskGP(X, train_Y, covar_module=covar_module)
+    else:
+        likelihood = GaussianLikelihood(noise_constraint=Interval(1e-8, 1e-3))
+        covar_module = ScaleKernel(MaternKernel(
+            nu=2.5, ard_num_dims=dim, lengthscale_constraint=Interval(0.005, 4.0)
+        ))
+        model = SingleTaskGP(X, train_Y, covar_module=covar_module, likelihood=likelihood)
+    fit_gpytorch_mll(ExactMarginalLogLikelihood(model.likelihood, model))
+    return model
+
+
+def lengthscale(model):
+    kernel = model.covar_module
+    return (kernel.base_kernel if isinstance(kernel, ScaleKernel) else kernel).lengthscale
 
 
 def trust_region_bounds(state, model, X, Y):
-    """Same TR construction as `generate_batch`, returned for plotting."""
+    """Same TR construction as `generate_batch` in src/AdaScale_TuRBO_optimize.py."""
     x_center = X[Y.argmax(), :].clone()
-    weights = model.covar_module.lengthscale.squeeze().detach()
+    weights = lengthscale(model).squeeze().detach()
     weights = weights / weights.mean()
     weights = weights / torch.prod(weights.pow(1.0 / len(weights)))
     tr_lb = torch.clamp(x_center - weights * state.length / 2.0, 0.0, 1.0)
@@ -58,7 +93,7 @@ def trust_region_bounds(state, model, X, Y):
     return tr_lb, tr_ub
 
 
-def run(seed, n_init, n_iter, tol, length_init):
+def run(method, seed, n_init, n_iter, tol, length_init):
     torch.manual_seed(seed)
     fun = Branin(negate=True).to(dtype=dtype, device=device)  # maximize -Branin
     lb, ub = fun.bounds[0], fun.bounds[1]
@@ -76,16 +111,12 @@ def run(seed, n_init, n_iter, tol, length_init):
     for it in range(n_iter):
         train_Y = (Y - Y.mean()) / Y.std()
         with gpytorch.settings.max_cholesky_size(max_cholesky_size):
-            covar_module = get_covar_module_with_dim_scaled_prior(
-                ard_num_dims=dim, use_rbf_kernel=False, length=state.length, dim=dim
-            )
-            model = SingleTaskGP(X, train_Y, covar_module=covar_module)
-            fit_gpytorch_mll(ExactMarginalLogLikelihood(model.likelihood, model))
-
+            model = fit_model(method, X, train_Y, state.length)
             tr_lb, tr_ub = trust_region_bounds(state, model, X, train_Y)
-            X_next = generate_batch(
-                state=state, model=model, X=X, Y=train_Y, batch_size=1,
-                num_restarts=5, raw_samples=200, acqf="ei",
+            # Same as the acqf="ei" branch of `generate_batch`
+            X_next, _ = optimize_acqf(
+                qLogExpectedImprovement(model, train_Y.max()),
+                bounds=torch.stack([tr_lb, tr_ub]), q=1, num_restarts=5, raw_samples=200,
             )
         Y_next = evaluate(X_next)
 
@@ -132,7 +163,7 @@ def _branin_grid(xlim, ylim, n):
     return g1, g2, Branin()(grid).numpy().reshape(g1.shape)
 
 
-def animate(X_all, f_all, history, lb, ub, n_init, tol, out_path, fps=2):
+def animate(X_all, f_all, history, lb, ub, n_init, tol, out_path, name, fps=2):
     plt.rcParams.update({
         "font.family": "serif",
         "mathtext.fontset": "cm",
@@ -233,13 +264,13 @@ def animate(X_all, f_all, history, lb, ub, n_init, tol, out_path, fps=2):
                 a.set_visible(k >= it)
 
         if k == 0:
-            title.set_text(f"AdaScale-TuRBO on Branin: initial design ({n_init} Sobol points)")
+            title.set_text(f"{name} on Branin: initial design ({n_init} Sobol points)")
         else:
             note = "  (TR restarted)" if h["restarted"] else ""
             if k == n_iter and regret[n_seen - 1] < tol:
                 note = "  (converged)"
             title.set_text(
-                f"AdaScale-TuRBO on Branin: iteration {k},  $L = {h['length']:.3g}$,  "
+                f"{name} on Branin: iteration {k},  $L = {h['length']:.3g}$,  "
                 f"best $f = {f_all[i_best]:.5f}$  ($f^* = {BRANIN_MIN}$){note}"
             )
 
@@ -252,6 +283,7 @@ def animate(X_all, f_all, history, lb, ub, n_init, tol, out_path, fps=2):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--method", choices=list(METHOD_NAMES), default="adascale")
     parser.add_argument("--seed", type=int, default=3)
     parser.add_argument("--n-init", type=int, default=5)
     parser.add_argument("--n-iter", type=int, default=50)
@@ -259,15 +291,19 @@ def main():
     parser.add_argument("--length-init", type=float, default=0.4,
                         help="initial TR side length (TuRBO default 0.8)")
     parser.add_argument("--fps", type=int, default=2)
-    parser.add_argument(
-        "--out", default=os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                      "branin_adascale_turbo.gif"),
-    )
+    parser.add_argument("--out", help="output GIF (default: examples/branin_<method>.gif)")
     args = parser.parse_args()
+    out = args.out or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "branin_adascale_turbo.gif" if args.method == "adascale" else "branin_turbo.gif",
+    )
 
-    X_all, f_all, history, lb, ub = run(args.seed, args.n_init, args.n_iter, args.tol, args.length_init)
-    animate(X_all, f_all, history, lb, ub, args.n_init, args.tol, args.out, fps=args.fps)
-    print(f"Saved {args.out}")
+    X_all, f_all, history, lb, ub = run(
+        args.method, args.seed, args.n_init, args.n_iter, args.tol, args.length_init
+    )
+    animate(X_all, f_all, history, lb, ub, args.n_init, args.tol, out,
+            METHOD_NAMES[args.method], fps=args.fps)
+    print(f"Saved {out}")
 
 
 if __name__ == "__main__":
